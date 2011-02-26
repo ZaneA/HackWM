@@ -137,10 +137,47 @@ char *readd()
 	return &line;
 }
 
+static int Lua_MessageBox(lua_State *lvm)
+{
+	char *text = lua_tostring(lvm, 1);
+	MessageBox(NULL, text, text, MB_OK);
+	return 0;
+}
+
+static int Lua_printd(lua_State *lvm)
+{
+	printd("%s\n", lua_tostring(lvm, 1));
+	return 0;
+}
+
+static int Lua_readd(lua_State *lvm)
+{
+	lua_pushstring(lvm, readd());
+	return 1;
+}
+
+static int Lua_SetStatus(lua_State *lvm)
+{
+	SetStatus("%s", lua_tostring(lvm, 1));
+	return 0;
+}
+
+static int Lua_SetStatusS(lua_State *lvm)
+{
+	SetStatusS("%s", lua_tostring(lvm, 1));
+	return 0;
+}
+
 // Initialize Lua Interpreter
 static BOOL CreateLua()
 {
         lvm = lua_open();
+
+	lua_register(lvm, "MessageBox", Lua_MessageBox);
+	lua_register(lvm, "printd", Lua_printd);
+	lua_register(lvm, "readd", Lua_printd);
+	lua_register(lvm, "SetStatus", Lua_SetStatus);
+	lua_register(lvm, "SetStatusS", Lua_SetStatusS);
 
         return TRUE;
 }
