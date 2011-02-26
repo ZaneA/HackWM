@@ -35,6 +35,8 @@
 #define WINDOW_NAME		"HackWM"
 #define WINDOW_STYLE		WS_POPUP & ~WS_BORDER
 #define WINDOW_STYLE_EX		WS_EX_NOACTIVATE | WS_EX_TOPMOST
+#define SetStatus(fmt, args...) SetStatusExt(TRUE, fmt, ## args)
+#define SetStatusS(fmt, args...) SetStatusExt(FALSE, fmt, ## args)
 
 // Command Handlers
 #define COM_UNHANDLED		0
@@ -113,6 +115,7 @@ void printd(char *fmt, ...)
         // Get a console handle
         HANDLE out = GetStdHandle(STD_OUTPUT_HANDLE);
         if (out) { // if found an open console, then write to it
+		SetConsoleTitle("HackWM Debug Console");
                 DWORD written;
                 WriteConsole(out, line, strlen(line), &written, NULL);
         }
@@ -183,29 +186,26 @@ static void DestroyLua()
 }
 
 // Set status text and open the status window
-void SetStatus(char *text, ...) {
-        // Clear status
-        memset(&status.text, 0, sizeof(status.text));
+void SetStatusExt(BOOL close, char *text, ...)
+{
+	// Clear status
+	memset(&status.text, 0, sizeof(status.text));
 
-        // Build new status using variable arguments
-        va_list ap;
-        va_start(ap, text);
-        vsnprintf(status.text, sizeof(status.text), text, ap);
-        va_end(ap);
+	// Build new status using variable arguments
+	va_list ap;
+	va_start(ap, text);
+	vsnprintf(status.text, sizeof(status.text), text, ap);
+	va_end(ap);
 
-        SIZE size;
-        HDC hdc = GetDC(status.hwnd);
-        GetTextExtentPoint32(hdc, status.text, strlen(status.text), &size);
-        int window_width = (size.cx * 0.9) + 10;
-        int window_height = (size.cy * 0.9) + 10;
-        SetWindowPos(status.hwnd, HWND_TOPMOST, groups->width - window_width - status.padding, groups->height - window_height - status.padding, window_width, window_height, SWP_FRAMECHANGED);
+	ShowWindow(status.hwnd, SW_SHOW);
 
-        ShowWindow(status.hwnd, SW_SHOW);
+	// Invalidate so it repaints with new text
+	InvalidateRect(status.hwnd, NULL, TRUE);
 
-        // Invalidate so it repaints with new text
-        InvalidateRect(status.hwnd, NULL, TRUE);
-        // Set timer for it to blend out
-        SetTimer(status.hwnd, TIMER_CLOSESTATUS, 2000, NULL);
+	if (close) {
+		// Set timer for it to blend out
+		SetTimer(status.hwnd, TIMER_CLOSESTATUS, 2000, NULL);
+	}
 }
 
 static BOOL IsGoodWindow(HWND hwnd)
@@ -708,7 +708,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         groups->width = rc.right;
         groups->height = rc.bottom;
 
-        status.hwnd = CreateWindowEx(WINDOW_STYLE_EX, WINDOW_NAME, WINDOW_NAME, WINDOW_STYLE, 0, 0, 0, 0, NULL, NULL, hInstance, NULL);
+        status.hwnd = CreateWindowEx(WINDOW_STYLE_EX, WINDOW_NAME, WINDOW_NAME, WINDOW_STYLE, groups->x, groups->y, groups->width, 24, NULL, NULL, hInstance, NULL);
 
         // Mostly fatal, although it could be possible to try again with a MESSAGE only window..
         if (!status.hwnd) {
