@@ -1,8 +1,7 @@
 //
 // HackWM
-// Copyright 2010, Zane Ashby, http://github.com/ZaneA/HackWM
+// Copyright 2010-2011, Zane Ashby, http://github.com/ZaneA/HackWM
 //
-
 
 //
 // Includes
@@ -14,6 +13,7 @@
 #include <windows.h>
 #include <stdlib.h>
 #include <stdio.h>
+
 
 #include "lua/include/lua.h"
 #include "lua/include/lauxlib.h"
@@ -35,6 +35,11 @@
 #define WINDOW_NAME		"HackWM"
 #define WINDOW_STYLE		WS_POPUP & ~WS_BORDER
 #define WINDOW_STYLE_EX		WS_EX_NOACTIVATE | WS_EX_TOPMOST
+
+// Command Handlers
+#define COM_UNHANDLED		0
+#define COM_HANDLED		1
+#define COM_QUIT		2
 
 
 //
@@ -94,8 +99,8 @@ char tile_function[128];
 // Functions
 //
 
-// Debug function
-static void printd(char *fmt, ...)
+// Print to Debug Console
+void printd(char *fmt, ...)
 {
         char line[256];
 
@@ -111,6 +116,22 @@ static void printd(char *fmt, ...)
                 DWORD written;
                 WriteConsole(out, line, strlen(line), &written, NULL);
         }
+}
+
+// Read from Debug Console
+char *readd()
+{
+	static char line[256];
+	int charsRead = 0;
+
+	memset(line, 0, sizeof(line));
+
+	HANDLE in = GetStdHandle(STD_INPUT_HANDLE);
+	if (in) { // Found input handle
+		ReadConsole(in, &line, sizeof(line), &charsRead, NULL);
+	}
+
+	return &line;
 }
 
 // Initialize Lua Interpreter
@@ -142,6 +163,19 @@ static BOOL LuaRunFile(char *path)
         return TRUE;
 }
 
+static BOOL LuaEval(char *code)
+{
+	int error = luaL_loadbuffer(lvm, code, strlen(code), "eval") || lua_pcall(lvm, 0, LUA_MULTRET, 0);
+
+	if (error) {
+		SetStatus("Error: %s", lua_tostring(lvm, -1));
+		lua_pop(lvm, 1);
+		return FALSE;
+	}
+
+	return TRUE;
+}
+
 // Destroy Lua Interpreter
 static void DestroyLua()
 {
@@ -149,7 +183,7 @@ static void DestroyLua()
 }
 
 // Set status text and open the status window
-static void SetStatus(char *text, ...) {
+void SetStatus(char *text, ...) {
         // Clear status
         memset(&status.text, 0, sizeof(status.text));
 
@@ -332,9 +366,9 @@ static void LuaPutNumber(char *name, int num)
 // Load settings from lua file
 static void LoadSettings()
 {
-        LuaRunFile("config.lua");
+	LuaRunFile("config.lua");
 
-        status.padding = LuaGetNumber("status_padding", 10);
+	status.padding = LuaGetNumber("status_padding", 10);
         status.font_size = LuaGetNumber("status_font_size", 16);
         status.font_bold = LuaGetBool("status_font_bold", TRUE);
         status.activate_key = LuaGetNumber("status_activate_key", VK_CAPITAL);
@@ -410,46 +444,52 @@ static int ScanInput()
         if (!strcmp("Q, Q", status.input)) { // Close HackWM
                 SetStatus("Bye bye!");
                 SetTimer(status.hwnd, TIMER_QUIT, 2000, NULL);
-                return 2;
+                return COM_QUIT;
         }
 
         if (!strcmp("Q, R", status.input)) { // Reload Settings
                 LoadSettings();
-                return 1;
+                return COM_HANDLED;
         }
 
         if (!strcmp("Q, D", status.input)) { // Open/Close Debug Console
                 static BOOL debug = FALSE;
                 (debug = !debug) ? AllocConsole() : FreeConsole();
-                return 1;
+                return COM_HANDLED;
         }
+
+	if (!strcmp("Q, E", status.input)) { // Evaluate Lua
+		printd("Lua: ");
+		LuaEval(readd());
+		return COM_HANDLED;
+	}
 
         if (!strcmp("M, H", status.input)) { // Increase Master Area Count
                 groups->master_count++;
                 TileWindowsInGroup(groups);
-                return 1;
+                return COM_HANDLED;
         }
 
         if (!strcmp("M, L", status.input)) { // Decrease Master Area Count
                 groups->master_count--;
                 if (groups->master_count < 1) groups->master_count = 1;
                 TileWindowsInGroup(groups);
-                return 1;
+                return COM_HANDLED;
         }
 
         if (!strcmp("M, K", status.input)) { // Increase Margin
                 groups->margin -= 20;
                 TileWindowsInGroup(groups);
-                return 1;
+                return COM_HANDLED;
         }
 
         if (!strcmp("M, J", status.input)) { // Decrease Margin
                 groups->margin += 20;
                 TileWindowsInGroup(groups);
-                return 1;
+                return COM_HANDLED;
         }
 
-        return 0;
+        return COM_UNHANDLED;
 }
 
 // Main Keyhook logic
