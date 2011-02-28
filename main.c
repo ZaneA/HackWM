@@ -137,6 +137,13 @@ char *readd()
 	return &line;
 }
 
+char *WindowTitle(HWND hwnd)
+{
+	static char title[256];
+	GetWindowText(hwnd, title, sizeof(title));
+	return &title;
+}
+
 static int Lua_MessageBox(lua_State *lvm)
 {
 	char *text = lua_tostring(lvm, 1);
@@ -278,6 +285,8 @@ static BOOL InsertWindow(group_t *groupnode, HWND hwnd)
 
         groupnode->first_window = node;
 
+	printd("%i (%s) Inserted into group\n", hwnd, WindowTitle(hwnd));
+
         return TRUE;
 }
 
@@ -298,6 +307,8 @@ static BOOL RemoveWindow(group_t *groupnode, HWND hwnd)
                         }
 
                         free(node);
+
+			printd("%i (%s) Removed from group\n", hwnd, WindowTitle(hwnd));
 
                         return TRUE; // Found and removed
                 }
@@ -449,7 +460,11 @@ static BOOL TileWindowsInGroup(group_t *group)
 
         int i = 0;
         for (window_t *node = group->first_window; node; node = node->next, i++) {
-                if (IsIconic(node->hwnd) || IsZoomed(node->hwnd)) { i--; continue; }
+                if (IsIconic(node->hwnd) || IsZoomed(node->hwnd)) {
+			printd("%i (%s) is Fullscreen or Minimized, skipping tiling..\n", node->hwnd, WindowTitle(node->hwnd));
+			i--;
+			continue;
+		}
 
                 LuaPutNumber("a", a);
                 LuaPutNumber("i", i);
@@ -465,7 +480,7 @@ static BOOL TileWindowsInGroup(group_t *group)
                 int width = LuaGetNumber("width", group->width);
                 int height = LuaGetNumber("height", group->height);
 
-                printd("%i %i %i %i\n", x, y, width, height);
+                printd("%i (%s) tiled at: %i %i %i %i\n", node->hwnd, WindowTitle(node->hwnd), x, y, width, height);
 
                 //ShowWindow(node->hwnd, SW_RESTORE);
                 SetWindowPos(node->hwnd, HWND_TOP, x, y, width, height, SWP_SHOWWINDOW);
@@ -480,7 +495,7 @@ static int ScanInput()
 {
         if (!strcmp("Q, Q", status.input)) { // Close HackWM
                 SetStatus("Bye bye!");
-                SetTimer(status.hwnd, TIMER_QUIT, 2000, NULL);
+                SetTimer(status.hwnd, TIMER_QUIT, 1000, NULL);
                 return COM_QUIT;
         }
 
@@ -509,7 +524,7 @@ static int ScanInput()
 
         if (!strcmp("M, L", status.input)) { // Decrease Master Area Count
                 groups->master_count--;
-                if (groups->master_count < 1) groups->master_count = 1;
+                if (groups->master_count < 0) groups->master_count = 0;
                 TileWindowsInGroup(groups);
                 return COM_HANDLED;
         }
@@ -631,6 +646,18 @@ static void Cleanup()
         DestroyWindow(status.hwnd);
 }
 
+BOOL proc(HWND hwnd, LPARAM user)
+{
+	InsertWindow(groups, hwnd);
+	return TRUE;
+}
+
+void SetupExistingWindows()
+{
+	EnumChildWindows(GetDesktopWindow(), proc, 0);
+	TileWindowsInGroup(groups);
+}
+
 // Handle window messages, including shell messages :D
 LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 {
@@ -642,14 +669,12 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                 {
                         case HSHELL_WINDOWCREATED:
                                 if (InsertWindow(groups, message_hwnd)) {
-                                        printd("%i Inserted into group\n", message_hwnd);
                                         TileWindowsInGroup(groups);
                                 }
                                 break;
 
                         case HSHELL_WINDOWDESTROYED:
                                 if (RemoveWindow(groups, message_hwnd)) {
-                                        printd("%i Removed from group\n", message_hwnd);
                                         TileWindowsInGroup(groups);
                                 }
                                 break;
@@ -659,7 +684,7 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
                                 break;
 
                         case HSHELL_WINDOWACTIVATED:
-                                printd("%i Activated\n", message_hwnd);
+                                printd("%i (%s) Activated\n", message_hwnd, WindowTitle(message_hwnd));
                                 break;
 
                         case HSHELL_ACTIVATESHELLWINDOW:
@@ -772,6 +797,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
         RegisterShellHookWindow(status.hwnd);
 
         shell_message_id = RegisterWindowMessage("SHELLHOOK"); 
+
+	SetupExistingWindows();
 
         // Pump messages
         while (GetMessage(&msg, NULL, 0, 0) > 0)
