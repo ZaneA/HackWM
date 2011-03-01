@@ -165,16 +165,25 @@ void SetStatusExt(BOOL close, char *text, ...)
 	vsnprintf(status.text, sizeof(status.text), text, ap);
 	va_end(ap);
 
+	if (strlen(text) > 0) {
+		printd("SetStatus: %s\n", status.text);
+	}
+
 	ShowWindow(status.hwnd, SW_SHOW);
 
 	// Invalidate so it repaints with new text
 	InvalidateRect(status.hwnd, NULL, TRUE);
 
+	// Close window in 2 seconds
 	if (close) {
-		// Set timer for it to blend out
 		SetTimer(status.hwnd, TIMER_CLOSESTATUS, 2000, NULL);
 	}
 }
+
+
+//
+// Lua Bindings
+//
 
 static int Lua_MessageBox(lua_State *lvm)
 {
@@ -207,6 +216,11 @@ static int Lua_SetStatusS(lua_State *lvm)
 	return 0;
 }
 
+
+//
+// Lua Setup
+//
+
 // Initialize Lua Interpreter
 static BOOL CreateLua()
 {
@@ -218,6 +232,8 @@ static BOOL CreateLua()
 	lua_register(lvm, "SetStatus", Lua_SetStatus);
 	lua_register(lvm, "SetStatusS", Lua_SetStatusS);
 
+	printd("Lua Interpreter opened\n");
+
         return TRUE;
 }
 
@@ -226,14 +242,10 @@ static BOOL LuaRunFile(char *path)
 {
         if (!lvm) { return FALSE; }
 
-        char real_path[MAX_PATH];
-        GetCurrentDirectory(MAX_PATH, real_path);
-        strncat(real_path, "\\", sizeof(real_path)-strlen(real_path)-1);
-        strncat(real_path, path, sizeof(real_path)-strlen(real_path)-1);
+        int s = luaL_dofile(lvm, path);
 
-        int s = luaL_dofile(lvm, real_path);
         if (s != 0) {
-                printd("Error in lua script: %s\n", lua_tostring(lvm, 1));
+                SetStatus("Lua Error: %s", lua_tostring(lvm, -1));
                 lua_pop(lvm, 1);
 
                 return FALSE;
@@ -242,13 +254,17 @@ static BOOL LuaRunFile(char *path)
         return TRUE;
 }
 
+// Evaluate a line of code in the Lua Interpreter
 static BOOL LuaEval(char *code)
 {
-	int error = luaL_loadbuffer(lvm, code, strlen(code), "eval") || lua_pcall(lvm, 0, LUA_MULTRET, 0);
+	if (!lvm) { return FALSE; }
 
-	if (error) {
-		SetStatus("Error: %s", lua_tostring(lvm, -1));
+	int s = luaL_loadbuffer(lvm, code, strlen(code), "eval") || lua_pcall(lvm, 0, LUA_MULTRET, 0);
+
+	if (s != 0) {
+		SetStatus("Lua Error: %s", lua_tostring(lvm, -1));
 		lua_pop(lvm, 1);
+
 		return FALSE;
 	}
 
@@ -259,8 +275,11 @@ static BOOL LuaEval(char *code)
 static void DestroyLua()
 {
         lua_close(lvm);
+
+	printd("Lua Interpreter closed\n");
 }
 
+// Checks if an HWND should be tiled
 static BOOL IsGoodWindow(HWND hwnd)
 {
         if (hwnd == status.hwnd) return FALSE; // Don't want to tile the status window
@@ -271,6 +290,7 @@ static BOOL IsGoodWindow(HWND hwnd)
 
 	if (!strcmp("#32770", windclass)) return FALSE; // Don't tile message boxes
 
+	// This is essentially what Windows uses for the alt-tab display
         if (IsWindowVisible(hwnd) && (GetParent(hwnd) == 0)) {
                 int exstyle = GetWindowLong(hwnd, GWL_EXSTYLE);
                 HWND owner = GetWindow(hwnd, GW_OWNER);
@@ -352,7 +372,10 @@ static window_t* FindWindowInAll(HWND hwnd)
         // Loop through groups and windows and return group
         for (group_t *groupnode = groups; groupnode; groupnode = groupnode->next) {
                 window_t* win = FindWindowInGroup(groupnode, hwnd);
-                if (win) return win;
+
+                if (win) {
+			return win;
+		}
         }
 
         return NULL;
@@ -404,6 +427,7 @@ static void DrawStatus()
         EndPaint(status.hwnd, &ps);
 }
 
+// Get a number by name from the Lua stack, and return a default if it doesn't exist
 static int LuaGetNumber(char *name, int def)
 {
         lua_getglobal(lvm, name);
@@ -412,6 +436,7 @@ static int LuaGetNumber(char *name, int def)
         return number;
 }
 
+// Get a boolean by name from the Lua stack, and return a default if it doesn't exist
 static BOOL LuaGetBool(char *name, BOOL def)
 {
         lua_getglobal(lvm, name);
@@ -420,6 +445,7 @@ static BOOL LuaGetBool(char *name, BOOL def)
         return boolean;
 }
 
+// Put a number by name into the Lua stack
 static void LuaPutNumber(char *name, int num)
 {
         lua_pushnumber(lvm, num);
@@ -562,32 +588,38 @@ static int RunCommands()
 // Main Keyhook logic
 static int HandleKeyPress(PKBDLLHOOKSTRUCT key)
 {
-        static BOOL status_open = FALSE;
+        static BOOL status_open = FALSE; // Static because this will be checked in separate calls
 
         if (status_open) {
+		// If escape or the activate key is pressed then close the status box
                 if (key->vkCode == VK_ESCAPE || key->vkCode == status.activate_key) {
                         status_open = FALSE;
                         CloseStatus();
                         return 1;
                 }
 
-                if ((key->vkCode > 31) && (key->vkCode < 127)) {
-                        if (strlen(status.input) > 0) strncat(status.input, ", ", sizeof(status.input)-strlen(status.input)-1);
+		// Emacs style C-G to kill status box
+		if (GetKeyState(VK_CONTROL) < 0 && key->vkCode == 'G') {
+			status_open = FALSE;
+			CloseStatus();
+			return 1;
+		}
 
+		// If the key is a printable ascii characters
+                if ((key->vkCode > 31) && (key->vkCode < 127)) {
+                        if (strlen(status.input) > 0) { strncat(status.input, ", ", sizeof(status.input)-strlen(status.input)-1); }
+
+			// Print combinations Emacs style
                         if (GetKeyState(VK_CONTROL) < 0) { strncat(status.input, "C-", sizeof(status.input)-strlen(status.input)-1); }
                         else if (GetKeyState(VK_SHIFT) < 0) { strncat(status.input, "S-", sizeof(status.input)-strlen(status.input)-1); }
                         else if (GetKeyState(VK_LWIN) < 0) { strncat(status.input, "W-", sizeof(status.input)-strlen(status.input)-1); }
                         else if (key->flags & LLKHF_ALTDOWN) { strncat(status.input, "M-", sizeof(status.input)-strlen(status.input)-1); }
 
+			// A bit hacky
                         char keyChar[3] = { key->vkCode, '\0' };
                         strncat(status.input, keyChar, sizeof(status.input)-strlen(status.input)-1);
 
-                        if (GetKeyState(VK_CONTROL) < 0 && key->vkCode == 'G') {
-                                status_open = FALSE;
-                                CloseStatus();
-                                return 1;
-                        }
-
+			// Handle commands
                         int ret;
                         if ((ret = RunCommands()) > 0) {
                                 status_open = FALSE;
@@ -605,7 +637,7 @@ static int HandleKeyPress(PKBDLLHOOKSTRUCT key)
 
                 return 1;
         } else if (key->vkCode == status.activate_key) {
-                SetStatus("");
+                SetStatus(""); // Clear status
                 KillTimer(status.hwnd, TIMER_CLOSESTATUS); // HACK Don't close Status Window since we're awaiting input
                 status_open = TRUE;
 
@@ -700,10 +732,6 @@ LRESULT CALLBACK WndProc(HWND hwnd, UINT msg, WPARAM wParam, LPARAM lParam)
 
                         case HSHELL_WINDOWACTIVATED:
                                 printd("%i (%s) Activated\n", message_hwnd, WindowTitle(message_hwnd));
-                                break;
-
-                        case HSHELL_ACTIVATESHELLWINDOW:
-                                SetStatus("Hey there!");
                                 break;
                 }
 
