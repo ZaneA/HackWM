@@ -27,6 +27,8 @@
 #define strcmp_end(search, input) !(strlen(input) >= strlen(search) && !strcmp(search, input + strlen(input) - strlen(search)))
 #define strcmp_start(search, input) !strncmp(search, input, strlen(search))
 
+#define COMMAND(search) if (!strcmp(search, status.input))
+
 // Timers
 #define TIMER_CLOSESTATUS	1
 #define TIMER_QUIT		2
@@ -41,7 +43,7 @@
 // Command Handlers
 #define COM_UNHANDLED		0
 #define COM_HANDLED		1
-#define COM_QUIT		2
+#define COM_HANDLED_DONTCLOSE   2
 
 
 //
@@ -125,7 +127,7 @@ void printd(char *fmt, ...)
 char *readd()
 {
 	static char line[256];
-	int charsRead = 0;
+	DWORD charsRead = 0;
 
 	memset(line, 0, sizeof(line));
 
@@ -134,19 +136,49 @@ char *readd()
 		ReadConsole(in, &line, sizeof(line), &charsRead, NULL);
 	}
 
-	return &line;
+	return (char*)&line;
 }
 
 char *WindowTitle(HWND hwnd)
 {
 	static char title[256];
 	GetWindowText(hwnd, title, sizeof(title));
-	return &title;
+	return (char*)&title;
+}
+
+char *WindowClass(HWND hwnd)
+{
+	static char class[256];
+	GetClassName(hwnd, class, sizeof(class));
+	return (char*)&class;
+}
+
+// Set status text and open the status window
+void SetStatusExt(BOOL close, char *text, ...)
+{
+	// Clear status
+	memset(&status.text, 0, sizeof(status.text));
+
+	// Build new status using variable arguments
+	va_list ap;
+	va_start(ap, text);
+	vsnprintf(status.text, sizeof(status.text), text, ap);
+	va_end(ap);
+
+	ShowWindow(status.hwnd, SW_SHOW);
+
+	// Invalidate so it repaints with new text
+	InvalidateRect(status.hwnd, NULL, TRUE);
+
+	if (close) {
+		// Set timer for it to blend out
+		SetTimer(status.hwnd, TIMER_CLOSESTATUS, 2000, NULL);
+	}
 }
 
 static int Lua_MessageBox(lua_State *lvm)
 {
-	char *text = lua_tostring(lvm, 1);
+	const char *text = lua_tostring(lvm, 1);
 	MessageBox(NULL, text, text, MB_OK);
 	return 0;
 }
@@ -182,7 +214,7 @@ static BOOL CreateLua()
 
 	lua_register(lvm, "MessageBox", Lua_MessageBox);
 	lua_register(lvm, "printd", Lua_printd);
-	lua_register(lvm, "readd", Lua_printd);
+	lua_register(lvm, "readd", Lua_readd);
 	lua_register(lvm, "SetStatus", Lua_SetStatus);
 	lua_register(lvm, "SetStatusS", Lua_SetStatusS);
 
@@ -229,32 +261,15 @@ static void DestroyLua()
         lua_close(lvm);
 }
 
-// Set status text and open the status window
-void SetStatusExt(BOOL close, char *text, ...)
-{
-	// Clear status
-	memset(&status.text, 0, sizeof(status.text));
-
-	// Build new status using variable arguments
-	va_list ap;
-	va_start(ap, text);
-	vsnprintf(status.text, sizeof(status.text), text, ap);
-	va_end(ap);
-
-	ShowWindow(status.hwnd, SW_SHOW);
-
-	// Invalidate so it repaints with new text
-	InvalidateRect(status.hwnd, NULL, TRUE);
-
-	if (close) {
-		// Set timer for it to blend out
-		SetTimer(status.hwnd, TIMER_CLOSESTATUS, 2000, NULL);
-	}
-}
-
 static BOOL IsGoodWindow(HWND hwnd)
 {
         if (hwnd == status.hwnd) return FALSE; // Don't want to tile the status window
+
+	char *windclass = WindowClass(hwnd);
+
+	if (!strcmp("ConsoleWindowClass", windclass)) return FALSE; // Don't tile console windows
+
+	if (!strcmp("#32770", windclass)) return FALSE; // Don't tile message boxes
 
         if (IsWindowVisible(hwnd) && (GetParent(hwnd) == 0)) {
                 int exstyle = GetWindowLong(hwnd, GWL_EXSTYLE);
@@ -491,51 +506,51 @@ static BOOL TileWindowsInGroup(group_t *group)
 }
 
 // Check input for patterns and perform actions if necessary
-static int ScanInput()
+static int RunCommands()
 {
-        if (!strcmp("Q, Q", status.input)) { // Close HackWM
+	COMMAND("Q, Q") { // Close HackWM
                 SetStatus("Bye bye!");
                 SetTimer(status.hwnd, TIMER_QUIT, 1000, NULL);
-                return COM_QUIT;
+                return COM_HANDLED_DONTCLOSE;
         }
 
-        if (!strcmp("Q, R", status.input)) { // Reload Settings
+        COMMAND("Q, R") { // Reload Settings
                 LoadSettings();
                 return COM_HANDLED;
         }
 
-        if (!strcmp("Q, D", status.input)) { // Open/Close Debug Console
+        COMMAND("Q, D") { // Open/Close Debug Console
                 static BOOL debug = FALSE;
                 (debug = !debug) ? AllocConsole() : FreeConsole();
                 return COM_HANDLED;
         }
 
-	if (!strcmp("Q, E", status.input)) { // Evaluate Lua
+	COMMAND("Q, E") { // Evaluate Lua
 		printd("Lua: ");
 		LuaEval(readd());
 		return COM_HANDLED;
 	}
 
-        if (!strcmp("M, H", status.input)) { // Increase Master Area Count
+        COMMAND("M, H") { // Increase Master Area Count
                 groups->master_count++;
                 TileWindowsInGroup(groups);
                 return COM_HANDLED;
         }
 
-        if (!strcmp("M, L", status.input)) { // Decrease Master Area Count
+        COMMAND("M, L") { // Decrease Master Area Count
                 groups->master_count--;
                 if (groups->master_count < 0) groups->master_count = 0;
                 TileWindowsInGroup(groups);
                 return COM_HANDLED;
         }
 
-        if (!strcmp("M, K", status.input)) { // Increase Margin
+        COMMAND("M, K") { // Increase Margin
                 groups->margin -= 20;
                 TileWindowsInGroup(groups);
                 return COM_HANDLED;
         }
 
-        if (!strcmp("M, J", status.input)) { // Decrease Margin
+        COMMAND("M, J") { // Decrease Margin
                 groups->margin += 20;
                 TileWindowsInGroup(groups);
                 return COM_HANDLED;
@@ -574,10 +589,10 @@ static int HandleKeyPress(PKBDLLHOOKSTRUCT key)
                         }
 
                         int ret;
-                        if ((ret = ScanInput()) > 0) {
+                        if ((ret = RunCommands()) > 0) {
                                 status_open = FALSE;
 
-                                if (ret == 1) {
+                                if (ret == COM_HANDLED) {
                                         CloseStatus();
                                 }
 
@@ -646,13 +661,13 @@ static void Cleanup()
         DestroyWindow(status.hwnd);
 }
 
-BOOL proc(HWND hwnd, LPARAM user)
+BOOL CALLBACK proc(HWND hwnd, LPARAM user)
 {
 	InsertWindow(groups, hwnd);
 	return TRUE;
 }
 
-void SetupExistingWindows()
+void TileExistingWindows()
 {
 	EnumChildWindows(GetDesktopWindow(), proc, 0);
 	TileWindowsInGroup(groups);
@@ -798,7 +813,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE hPrevInstance, LPSTR lpCmdLine
 
         shell_message_id = RegisterWindowMessage("SHELLHOOK"); 
 
-	SetupExistingWindows();
+	TileExistingWindows();
 
         // Pump messages
         while (GetMessage(&msg, NULL, 0, 0) > 0)
