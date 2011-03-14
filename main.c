@@ -139,6 +139,7 @@ char *readd()
 	return (char*)&line;
 }
 
+// Get Window Title
 char *WindowTitle(HWND hwnd)
 {
 	static char title[256];
@@ -146,6 +147,7 @@ char *WindowTitle(HWND hwnd)
 	return (char*)&title;
 }
 
+// Get Window Class
 char *WindowClass(HWND hwnd)
 {
 	static char class[256];
@@ -278,6 +280,11 @@ static void DestroyLua()
 
 	printd("Lua Interpreter closed\n");
 }
+
+
+//
+// Tiling Functions and Utilities
+//
 
 // Checks if an HWND should be tiled
 static BOOL IsGoodWindow(HWND hwnd)
@@ -426,6 +433,11 @@ static void DrawStatus()
 
         EndPaint(status.hwnd, &ps);
 }
+
+
+//
+// More Lua Utilities
+//
 
 // Get a number by name from the Lua stack, and return a default if it doesn't exist
 static int LuaGetNumber(char *name, int def)
@@ -693,16 +705,18 @@ static void Cleanup()
         DestroyWindow(status.hwnd);
 }
 
-BOOL CALLBACK proc(HWND hwnd, LPARAM user)
+// Called once for each top-level window
+BOOL CALLBACK WindowLoopProc(HWND hwnd, LPARAM user)
 {
-	InsertWindow(groups, hwnd);
+	InsertWindow(groups, hwnd); // Add window to group list
 	return TRUE;
 }
 
+// Tiles existing open top-level windows
 void TileExistingWindows()
 {
-	EnumChildWindows(GetDesktopWindow(), proc, 0);
-	TileWindowsInGroup(groups);
+	EnumChildWindows(GetDesktopWindow(), WindowLoopProc, 0);
+	TileWindowsInGroup(groups); // Tile group
 }
 
 // Handle window messages, including shell messages :D
